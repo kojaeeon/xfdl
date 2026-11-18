@@ -74,13 +74,13 @@
     <h2 id="datasets-title">데이터셋</h2>
     <div class="controls">
       <label for="datasets-search">검색</label>
-      <input id="datasets-search" type="search" placeholder="데이터셋, 컬럼, 연결된 UI">
+      <input id="datasets-search" type="search" placeholder="데이터셋, 컬럼, Grid 라벨">
       <button id="datasets-csv" type="button" disabled>데이터셋 CSV</button>
       <button id="datasets-copy" type="button" aria-label="데이터셋 표 Markdown 복사" disabled>Markdown 복사</button>
     </div>
     <p id="datasets-status" class="status" role="status"></p>
     <div class="scroll" tabindex="0" role="region" aria-labelledby="datasets-title">
-      <table><thead><tr><th scope="col">데이터셋 ID</th><th scope="col">컬럼 ID</th><th scope="col">타입</th><th scope="col">길이</th><th scope="col">연결된 UI</th></tr></thead><tbody id="datasets-body"></tbody></table>
+      <table><thead><tr><th scope="col">데이터셋 ID</th><th scope="col">컬럼 ID</th><th scope="col">타입</th><th scope="col">길이</th><th scope="col">연결된 UI</th><th scope="col">Grid 헤더 라벨</th></tr></thead><tbody id="datasets-body"></tbody></table>
     </div>
   </section>
 </main>
@@ -342,16 +342,54 @@ function targetPath(target) {
   return target.replace(/^this\./, "").replace(/\.form(?=\.|$)/g, "");
 }
 
+function gridCells(container, parentCol = 0, parentRow = 0) {
+  return children(container, "Cell").flatMap(cell => {
+    const col = parentCol + (Number(attr(cell, "col")) || 0);
+    const row = parentRow + (Number(attr(cell, "row")) || 0);
+    const span = Math.max(1, Number(attr(cell, "colspan")) || 1);
+    return [{ cell, col, end: col + span, row }, ...gridCells(cell, col, row)];
+  });
+}
+
+function gridColumnBindings(grid, path) {
+  const formats = children(grid, "Formats");
+  const inline = attr(grid, "formats");
+  if (inline.startsWith("<")) {
+    const doc = new DOMParser().parseFromString(inline, "application/xml");
+    if (!doc.doctype && doc.documentElement.localName === "Formats") formats.push(doc.documentElement);
+  }
+
+  const bindings = [];
+  for (const format of formats.flatMap(group => children(group, "Format"))) {
+    const formatId = attr(format, "id");
+    const source = formatId ? `${path} [${formatId}]` : path;
+    const bands = children(format, "Band");
+    const headers = bands.filter(band => attr(band, "id") === "head").flatMap(band => gridCells(band))
+      .map(({ cell, ...position }) => {
+        const text = attr(cell, "text");
+        const label = /^(?:expr|bind):/i.test(text) ? "(동적 라벨)" : text;
+        return { ...position, label };
+      })
+      .filter(header => header.label)
+      .sort((a, b) => a.row - b.row || (b.end - b.col) - (a.end - a.col));
+
+    for (const band of bands) {
+      const isBody = attr(band, "id") === "body";
+      for (const { cell, col, end } of gridCells(band)) {
+        const columns = Array.from(cell.attributes, attribute => /^bind:\s*(.+)$/.exec(attribute.value.trim())?.[1]).filter(Boolean);
+        if (!columns.length) continue;
+        const labels = isBody ? headers.filter(header => header.col <= col && header.end >= end).map(header => header.label) : [];
+        const header = labels.length ? `${source} → ${[...new Set(labels)].join(" / ")}` : "";
+        for (const column of columns) bindings.push({ column, ui: `${path} (bind:${column})`, header });
+      }
+    }
+  }
+  return bindings;
+}
+
 function datasetRows(form) {
   const datasets = new Map();
   const links = new Map();
-
-  function link(dataset, column, ui) {
-    if (!dataset || !column || !ui) return;
-    const key = JSON.stringify([dataset, column]);
-    if (!links.has(key)) links.set(key, new Set());
-    links.get(key).add(ui);
-  }
 
   function collect(node, scope) {
     const kind = node.localName;
@@ -380,20 +418,7 @@ function datasetRows(form) {
     }
     if (kind === "Grid" && id) {
       const dataset = targetPath(attr(node, "binddataset").replace(/^@/, ""));
-      const inline = attr(node, "formats");
-      const formats = Array.from(children(node, "Formats"));
-      if (inline.startsWith("<")) {
-        const formatDoc = new DOMParser().parseFromString(inline, "application/xml");
-        if (!formatDoc.doctype && formatDoc.documentElement.localName === "Formats") formats.push(formatDoc.documentElement);
-      }
-      for (const format of formats) {
-        for (const cell of format.getElementsByTagName("Cell")) {
-          for (const attribute of cell.attributes) {
-            const column = /^bind:\s*(.+)$/.exec(attribute.value.trim())?.[1];
-            if (column) bindings.push({ scope, dataset, column, ui: `${path} (bind:${column})` });
-          }
-        }
-      }
+      if (dataset) bindings.push(...gridColumnBindings(node, path).map(binding => ({ scope, dataset, ...binding })));
       return;
     }
     const childScope = ["Div", "PopupDiv", "Tab", "Tabpage"].includes(kind) && id ? path + "." : scope;
@@ -404,18 +429,25 @@ function datasetRows(form) {
 
   const bindings = [];
   collect(form, "");
-  for (const { scope, dataset, column, ui } of bindings) {
-    if (!dataset) continue;
+  for (const { scope, dataset, column, ui, header } of bindings) {
+    if (!dataset || !column || !ui) continue;
     let prefix = scope;
     while (prefix && !datasets.has(prefix + dataset)) {
       prefix = prefix.slice(0, prefix.lastIndexOf(".", prefix.length - 2) + 1);
     }
-    link(prefix + dataset, column, ui);
+    const key = JSON.stringify([prefix + dataset, column]);
+    if (!links.has(key)) links.set(key, { components: new Set(), headers: new Set() });
+    const entry = links.get(key);
+    entry.components.add(ui);
+    if (header) entry.headers.add(header);
   }
   return Array.from(datasets).flatMap(([dataset, columns]) => {
-    if (!columns.size) return [[dataset, "", "", "", ""]];
-    return Array.from(columns.values(), ({ name, type, size }) =>
-      [dataset, name, type, size, Array.from(links.get(JSON.stringify([dataset, name])) || []).join(", ")]);
+    if (!columns.size) return [[dataset, "", "", "", "", ""]];
+    return Array.from(columns.values(), ({ name, type, size }) => {
+      const entry = links.get(JSON.stringify([dataset, name]));
+      return [dataset, name, type, size, entry ? [...entry.components].join(", ") : "",
+        entry ? [...entry.headers].join("; ") : ""];
+    });
   });
 }
 
