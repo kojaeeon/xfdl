@@ -1,6 +1,6 @@
 # Nexacro 14 XFDL 분석기
 
-`index.html`을 [다운로드](https://raw.githubusercontent.com/kojaeeon/xfdl/main/index.html)해 Chromium 기반 Edge 또는 Chrome에서 열고 `.xfdl` 파일을 선택합니다. 설치와 서버 연결 없이 동작합니다. 저장소의 [예제 XFDL](examples/check-review.xfdl)로 먼저 확인할 수 있습니다.
+`index.html`을 [다운로드](https://raw.githubusercontent.com/kojaeeon/xfdl/main/index.html)해 Chromium 기반 Edge 또는 Chrome에서 엽니다. `.xfdl` 파일을 점선 영역에 끌어다 놓거나 파일 선택 버튼을 사용합니다. 설치와 서버 연결 없이 동작합니다. 저장소의 [예제 XFDL](examples/check-review.xfdl)로 먼저 확인할 수 있습니다.
 
 ## 결과표
 
@@ -9,7 +9,9 @@
 | 요소 · 이벤트 | 요소 경로, 유형, 이벤트, 핸들러, 핸들러 본문의 직접 호출 함수, 원본 파일 행 번호 |
 | 데이터셋 | 데이터셋 ID, 컬럼 ID, 타입, 길이, 연결된 컴포넌트 속성 또는 Grid 셀의 바인딩 |
 
-각 표를 따로 검색할 수 있습니다. CSV 버튼은 현재 표에서 검색에 걸린 행을 UTF-8 BOM 형식으로 저장합니다. 인코딩 자동 감지는 UTF-8, XML에 선언된 EUC-KR/CP949, BOM이 있거나 시그니처를 확인할 수 있는 UTF-16을 처리합니다. 필요한 경우 수동으로 인코딩을 바꿀 수 있습니다.
+각 표를 따로 검색할 수 있습니다. **Markdown 복사** 버튼은 현재 검색 결과를 머리글과 함께 Markdown 표로 클립보드에 복사합니다. CSV 버튼은 같은 행을 UTF-8 BOM 형식으로 저장합니다.
+
+인코딩 자동 감지는 UTF-8, XML에 선언된 EUC-KR/CP949, BOM이 있거나 시그니처를 확인할 수 있는 UTF-16을 처리합니다. 필요한 경우 수동으로 인코딩을 바꿀 수 있습니다.
 
 ### 분석 범위
 

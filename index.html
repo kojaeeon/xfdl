@@ -15,6 +15,11 @@
     section, .file-panel { background: white; border: 1px solid #d9e1ed; border-radius: 12px; padding: 18px; margin-bottom: 16px; }
     label { font-size: 14px; font-weight: 600; }
     .controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+    .drop-zone { padding: 12px; border: 1px dashed #8496af; border-radius: 8px; background: #f8faff; }
+    .drop-zone[data-dragging] { border-color: #234e9c; background: #e7efff; }
+    .drop-hint { margin: 0 0 8px; font-size: 14px; color: #465774; }
+    .encoding-controls { margin-top: 12px; }
+    .clipboard-buffer { position: fixed; top: 0; left: 0; opacity: 0; pointer-events: none; }
     input, select, button { font: inherit; max-width: 100%; }
     input[type="search"], select { padding: 7px 10px; border: 1px solid #8496af; border-radius: 6px; min-height: 36px; color: inherit; background: white; }
     input[type="search"] { width: min(100%, 290px); }
@@ -38,9 +43,14 @@
 <main>
   <h1>Nexacro 14 XFDL 분석기</h1>
   <div class="file-panel">
-    <div class="controls">
-      <label for="file">XFDL 파일</label>
-      <input id="file" type="file" accept=".xfdl">
+    <div id="drop-zone" class="drop-zone">
+      <p id="drop-hint" class="drop-hint">XFDL 파일을 여기에 끌어다 놓으세요.</p>
+      <div class="controls">
+        <label for="file">XFDL 파일</label>
+        <input id="file" type="file" accept=".xfdl" aria-describedby="drop-hint">
+      </div>
+    </div>
+    <div class="controls encoding-controls">
       <label for="encoding">인코딩</label>
       <select id="encoding"><option value="">자동</option><option value="utf-8">UTF-8</option><option value="euc-kr">CP949 / EUC-KR</option></select>
     </div>
@@ -53,6 +63,7 @@
       <label for="events-search">검색</label>
       <input id="events-search" type="search" placeholder="요소 ID, 이벤트, 함수명">
       <button id="events-csv" type="button" disabled>이벤트 CSV</button>
+      <button id="events-copy" type="button" aria-label="이벤트 표 Markdown 복사" disabled>Markdown 복사</button>
     </div>
     <p id="events-status" class="status" role="status"></p>
     <div class="scroll" tabindex="0" role="region" aria-labelledby="events-title">
@@ -65,6 +76,7 @@
       <label for="datasets-search">검색</label>
       <input id="datasets-search" type="search" placeholder="데이터셋, 컬럼, 연결된 UI">
       <button id="datasets-csv" type="button" disabled>데이터셋 CSV</button>
+      <button id="datasets-copy" type="button" aria-label="데이터셋 표 Markdown 복사" disabled>Markdown 복사</button>
     </div>
     <p id="datasets-status" class="status" role="status"></p>
     <div class="scroll" tabindex="0" role="region" aria-labelledby="datasets-title">
@@ -475,6 +487,8 @@ function decodeFile(buffer, preference) {
 
 const $ = id => document.getElementById(id);
 const groups = ["events", "datasets"];
+const dropZone = $("drop-zone");
+let selectedFile = null;
 let current = null;
 let revision = 0;
 
@@ -506,11 +520,16 @@ function render(group) {
   body.replaceChildren(fragment);
   $(`${group}-status`).textContent = current ? `${rows.length} / ${current[group].length}행` : "";
   $(`${group}-csv`).disabled = !rows.length;
+  $(`${group}-copy`).disabled = !rows.length;
+}
+
+function tableHeaders(group) {
+  const table = $(`${group}-body`).closest("table");
+  return Array.from(table.tHead.rows[0].cells, cell => cell.textContent);
 }
 
 function downloadCsv(group) {
-  const body = $(`${group}-body`);
-  const headers = Array.from(body.closest("table").tHead.rows[0].cells, cell => cell.textContent);
+  const headers = tableHeaders(group);
   const escape = value => {
     const safe = /^[\s\uFEFF]*[=+\-@]|^[\t\r\n]/.test(value) ? "'" + value : value;
     return '"' + safe.replaceAll('"', '""') + '"';
@@ -519,13 +538,57 @@ function downloadCsv(group) {
   const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${$("file").files[0].name.replace(/\.xfdl$/i, "")}-${group}.csv`;
+  link.download = `${selectedFile.name.replace(/\.xfdl$/i, "")}-${group}.csv`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function markdownTable(headers, rows) {
+  const escape = value => value.replace(/[\r\n\u2028\u2029]+/g, " ")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/[\\|`*_\[\]~]/g, "\\$&");
+  const line = cells => `| ${cells.map(escape).join(" | ")} |`;
+  return [line(headers), line(headers.map(() => "---")), ...rows.map(line)].join("\n");
+}
+
+function copyWithSelection(text) {
+  const active = document.activeElement;
+  const buffer = document.createElement("textarea");
+  buffer.value = text;
+  buffer.className = "clipboard-buffer";
+  buffer.readOnly = true;
+  document.body.appendChild(buffer);
+  buffer.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    buffer.remove();
+    active?.focus({ preventScroll: true });
+  }
+}
+
+async function copyMarkdown(group) {
+  const source = current;
+  const search = $(`${group}-search`);
+  const query = search.value;
+  const rows = visibleRows(group);
+  const markdown = markdownTable(tableHeaders(group), rows);
+  let copied;
+  try {
+    await navigator.clipboard.writeText(markdown);
+    copied = true;
+  } catch {
+    copied = copyWithSelection(markdown);
+  }
+  if (source !== current || query !== search.value) return;
+  const feedback = copied ? "Markdown 복사 완료" : "브라우저의 클립보드 권한을 확인하세요.";
+  $(`${group}-status`).textContent = `${rows.length} / ${source[group].length}행 · ${feedback}`;
+}
+
 async function loadFile() {
-  const file = $("file").files[0];
+  const file = selectedFile;
   const currentRevision = ++revision;
   const message = $("message");
   const warnings = $("warnings");
@@ -562,11 +625,43 @@ async function loadFile() {
   groups.forEach(render);
 }
 
-$("file").addEventListener("change", loadFile);
+function selectFiles(files) {
+  if (!files.length) return;
+  if (files.length !== 1 || !/\.xfdl$/i.test(files[0].name)) {
+    const message = $("message");
+    message.dataset.error = "true";
+    message.textContent = "확장자가 .xfdl인 파일을 한 개 선택하세요.";
+    return;
+  }
+  selectedFile = files[0];
+  loadFile();
+}
+
+$("file").addEventListener("change", event => {
+  selectFiles(event.target.files);
+  event.target.value = "";
+});
 $("encoding").addEventListener("change", loadFile);
+document.addEventListener("dragover", event => {
+  if (!event.dataTransfer?.types.includes("Files")) return;
+  event.preventDefault();
+  const overZone = dropZone.contains(event.target);
+  event.dataTransfer.dropEffect = overZone ? "copy" : "none";
+  dropZone.toggleAttribute("data-dragging", overZone);
+});
+dropZone.addEventListener("dragleave", event => {
+  if (!dropZone.contains(event.relatedTarget)) dropZone.removeAttribute("data-dragging");
+});
+document.addEventListener("drop", event => {
+  if (!event.dataTransfer?.files.length && !event.dataTransfer?.types.includes("Files")) return;
+  event.preventDefault();
+  dropZone.removeAttribute("data-dragging");
+  if (dropZone.contains(event.target)) selectFiles(event.dataTransfer.files);
+});
 for (const group of groups) {
   $(`${group}-search`).addEventListener("input", () => render(group));
   $(`${group}-csv`).addEventListener("click", () => downloadCsv(group));
+  $(`${group}-copy`).addEventListener("click", () => copyMarkdown(group));
   render(group);
 }
 </script>
